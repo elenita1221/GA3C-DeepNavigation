@@ -25,15 +25,30 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 # check python version; warn if not Python3
-import sys
+import os, sys
 import warnings
 if sys.version_info < (3,0):
     warnings.warn("Optimized for Python3. Performance may suffer under Python2.", Warning)
 
-import gym
-
 from Config import Config
 from Server import Server
+
+# Suppress the output from C functions
+# source - http://stackoverflow.com/questions/5081657/how-do-i-prevent-a-c-shared-library-to-print-on-stdout-in-python
+def redirect_stdout():
+    sys.stdout.flush() # <--- important when redirecting to files
+    newstdout = os.dup(1)
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(devnull, 1)
+    os.close(devnull)
+    sys.stdout = os.fdopen(newstdout, 'w')
+
+def checks():
+  if Config.STACKED_FRAMES != 1:
+    assert False, "Stacking of multiple frames not supported. See disentangle_obs() in NetworkVP.py"
+
+  if Config.NUM_LSTMS != 2:
+    assert False, "Architecture hard-wired for 2 stacked LSTM layers"
 
 # Parse arguments
 for i in range(1, len(sys.argv)):
@@ -52,8 +67,13 @@ if Config.PLAY_MODE:
     Config.LOAD_CHECKPOINT = True
     Config.TRAIN_MODELS = False
     Config.SAVE_MODELS = False
-
-gym.undo_logger_setup()
-
+    
+redirect_stdout()
+checks()
+print('+++ GA3C on %s +++'%Config.MAP)
+print('===Network===')
+print('LSTM layers:', Config.NUM_LSTMS)
+print("Reward clipping %s. Clipping affects policy!"%('ENABLED' if Config.REWARD_CLIPPING else 'DISABLED'))
+print('======')
 # Start main program
 Server().main()

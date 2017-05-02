@@ -31,15 +31,14 @@ else:
     from Queue import Queue
 
 import numpy as np
-import scipy.misc as misc
+#import scipy.misc as misc
 
 from Config import Config
 from GameManager import GameManager
 
-
 class Environment:
     def __init__(self):
-        self.game = GameManager(Config.ATARI_GAME, display=Config.PLAY_MODE)
+        self.game = GameManager(Config.MAP)
         self.nb_frames = Config.STACKED_FRAMES
         self.frame_q = Queue(maxsize=self.nb_frames)
         self.previous_state = None
@@ -47,46 +46,63 @@ class Environment:
         self.total_reward = 0
 
         self.reset()
-
+    
+    def is_running(self):
+        return self.game.is_running()
+    
     @staticmethod
     def _rgb2gray(rgb):
         return np.dot(rgb[..., :3], [0.299, 0.587, 0.114])
 
     @staticmethod
     def _preprocess(image):
-        image = Environment._rgb2gray(image)
-        image = misc.imresize(image, [Config.IMAGE_HEIGHT, Config.IMAGE_WIDTH], 'bilinear')
-        image = image.astype(np.float32) / 128.0 - 1.0
+        #image = Environment._rgb2gray(image)
+        #image = misc.imresize(image, [Config.IMAGE_HEIGHT, Config.IMAGE_WIDTH], 'bilinear')
+        image = image.astype(np.float32) / 255.
         return image
+
+    def _get_current_state_no_stacking(self):
+        if not self.frame_q.full():
+            return None  # frame queue is not full yet.
+        return np.array(list(self.frame_q.queue)[0])
 
     def _get_current_state(self):
         if not self.frame_q.full():
             return None  # frame queue is not full yet.
-        x_ = np.array(self.frame_q.queue)
-        x_ = np.transpose(x_, [1, 2, 0])  # move channels
+        x_ = [np.array(i) for i in list(self.frame_q.queue)]
+        x_ = np.concatenate(x_, axis=2)
+        #x_ = np.array(self.frame_q.queue)
+        #x_ = np.transpose(x_, [1, 2, 3, 0])  # move channels
         return x_
 
     def _update_frame_q(self, frame):
         if self.frame_q.full():
             self.frame_q.get()
-        image = Environment._preprocess(frame)
-        self.frame_q.put(image)
+        self.frame_q.put(frame)
+
+        # the state is no longer just the image, but a concatenation of
+        # image and auxiliary inputs. We can't use the same _preprocess()
+        #image = Environment._preprocess(frame)
+        #self.frame_q.put(image)
 
     def get_num_actions(self):
-        return self.game.env.action_space.n
+        return GameManager.get_num_actions()
 
     def reset(self):
         self.total_reward = 0
         self.frame_q.queue.clear()
-        self._update_frame_q(self.game.reset())
+        self.game.reset()
+        self._update_frame_q(self.game.get_state())
         self.previous_state = self.current_state = None
 
     def step(self, action):
-        observation, reward, done, _ = self.game.step(action)
-
+        reward, is_running = self.game.step(action)
         self.total_reward += reward
-        self._update_frame_q(observation)
-
         self.previous_state = self.current_state
-        self.current_state = self._get_current_state()
-        return reward, done
+        
+        if is_running:
+          observation = self.game.get_state()
+          self._update_frame_q(observation)
+          self.current_state = self._get_current_state_no_stacking() 
+          
+        return reward, is_running

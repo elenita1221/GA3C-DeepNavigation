@@ -68,7 +68,7 @@ class ProcessStats(Process):
             self.start_time = time.time()
             first_time = datetime.now()
             while True:
-                episode_time, reward, length = self.episode_log_q.get()
+                episode_time, reward, length, steps = self.episode_log_q.get()
                 results_logger.write('%s, %d, %d\n' % (episode_time.strftime("%Y-%m-%d %H:%M:%S"), reward, length))
                 results_logger.flush()
 
@@ -92,11 +92,13 @@ class ProcessStats(Process):
                 if self.episode_count.value % Config.PRINT_STATS_FREQUENCY == 0:
                     print(
                         '[Time: %8d] '
+                        '[Steps: %8d] '
                         '[Episode: %8d Score: %10.4f] '
                         '[RScore: %10.4f RPPS: %5d] '
                         '[PPS: %5d TPS: %5d] '
                         '[NT: %2d NP: %2d NA: %2d]'
                         % (int(time.time()-self.start_time),
+                           steps,
                            self.episode_count.value, reward,
                            rolling_reward / results_q.qsize(),
                            rolling_frame_count / (datetime.now() - first_time).total_seconds(),

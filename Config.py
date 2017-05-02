@@ -27,11 +27,17 @@
 class Config:
 
     #########################################################################
+    # Number of stacked LSTM layers
+    NUM_LSTMS = 2
+
+    #########################################################################
     # Game configuration
 
-    # Name of the game, with version (e.g. PongDeterministic-v0)
-    ATARI_GAME = 'PongDeterministic-v0'
-
+    #MAP = 'seekavoid_arena_01'
+    MAP = 'stairway_to_melon'
+    #MAP = 'nav_maze_static_01'
+    #MAP = 'nav_maze_static_02'
+    
     # Enable to see the trained agent in action
     PLAY_MODE = False
     # Enable to train
@@ -46,9 +52,9 @@ class Config:
     
     # If the dynamic configuration is on, these are the initial values.
     # Number of Agents
-    AGENTS = 32 
+    AGENTS = 8
     # Number of Predictors
-    PREDICTORS = 2
+    PREDICTORS = 2 
     # Number of Trainers
     TRAINERS = 2
 
@@ -56,7 +62,7 @@ class Config:
     DEVICE = 'gpu:0'
 
     # Enable the dynamic adjustment (+ waiting time to start it)
-    DYNAMIC_SETTINGS = True
+    DYNAMIC_SETTINGS = False
     DYNAMIC_SETTINGS_STEP_WAIT = 20
     DYNAMIC_SETTINGS_INITIAL_WAIT = 10
 
@@ -66,10 +72,14 @@ class Config:
     # Discount factor
     DISCOUNT = 0.99
     
-    # Tmax
-    TIME_MAX = 5
-    
+    # Tmax (Interval over which gradients are computerd)
+    TIME_MAX = 50
+   
+    # Maximum steps taken by agent in environment
+    MAX_STEPS = 10 * 10**7
+
     # Reward Clipping
+    REWARD_CLIPPING = False
     REWARD_MIN = -1
     REWARD_MAX = 1
 
@@ -78,21 +88,37 @@ class Config:
     PREDICTION_BATCH_SIZE = 128
 
     # Input of the DNN
-    STACKED_FRAMES = 4
+    STACKED_FRAMES = 1
     IMAGE_WIDTH = 84
     IMAGE_HEIGHT = 84
+    IMAGE_DEPTH = 3  # 3 for RGB, 4 for RGBD
+    
+    COMBINED_STATE_SIZE = 21240 # includes auxiliary inputs to NN  (TODO: can be calculated inside the program using other params)
+    VEL_DIM = 6 # velocity dimension
+    DEPTH_PIXELS = 64 # number of depth pixels for auxiliary supervision
+    DEPTH_QUANTIZATION = 8 # number of bins for depth
 
+    # scaling factors for depth loss
+    BETA1 = 1
+    BETA2 = 1
+
+    # Lab setting (frames per second)
+    FPS = 60
+
+    # Rotation for look-left, look-right actions [-512, 512]
+    ROTATION = 20
+  
     # Total number of episodes and annealing frequency
     EPISODES = 400000
     ANNEALING_EPISODE_COUNT = 400000
 
     # Entropy regualrization hyper-parameter
-    BETA_START = 0.01
-    BETA_END = 0.01
+    BETA_START = 0.001
+    BETA_END = 0.001
 
     # Learning rate
-    LEARNING_RATE_START = 0.0003
-    LEARNING_RATE_END = 0.0003
+    LEARNING_RATE_START = 0.0005
+    LEARNING_RATE_END = 0.0005
 
     # RMSProp parameters
     RMSPROP_DECAY = 0.99

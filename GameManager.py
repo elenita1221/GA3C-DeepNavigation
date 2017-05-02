@@ -24,26 +24,100 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-import gym
+import deepmind_lab
+import numpy as np
+from Config import Config
+import sys
 
+def _action(*entries):
+      return np.array(entries, dtype=np.intc)
 
 class GameManager:
-    def __init__(self, game_name, display):
-        self.game_name = game_name
-        self.display = display
 
-        self.env = gym.make(game_name)
+    ACTION_LIST = [
+     _action(-1*int(Config.ROTATION),   0,  0,  0, 0, 0, 0), # look_left
+     _action( int(Config.ROTATION),   0,  0,  0, 0, 0, 0), # look_right
+     #_action(  0,  10,  0,  0, 0, 0, 0), # look_up
+     #_action(  0, -10,  0,  0, 0, 0, 0), # look_down
+     #_action(-1*int(Config.ROTATION),   0,  0,  1, 0, 0, 0),
+     #_action( int(Config.ROTATION),   0,  0,  1, 0, 0, 0), 
+     _action(  0,   0, -1,  0, 0, 0, 0), # strafe_left
+     _action(  0,   0,  1,  0, 0, 0, 0), # strafe_right
+     _action(  0,   0,  0,  1, 0, 0, 0), # forward
+     _action(  0,   0,  0, -1, 0, 0, 0), # backward
+     #_action(  0,   0,  0,  0, 1, 0, 0), # fire
+     #_action(  0,   0,  0,  0, 0, 1, 0), # jump
+     #_action(  0,   0,  0,  0, 0, 0, 1)  # crouch
+    ]
+
+    def __init__(self, map_name):
+        self.map_name = map_name
+        self.obs_specs = ['RGBD_INTERLACED', 'VEL.TRANS', 'VEL.ROT']
+
+        self.lab = deepmind_lab.Lab(map_name, self.obs_specs, config={
+            'fps': str(Config.FPS),
+            'width': str(Config.IMAGE_WIDTH),
+            'height': str(Config.IMAGE_HEIGHT)
+            })
+
+        self.prev_action = 0
+        self.prev_reward = 0
         self.reset()
 
     def reset(self):
-        observation = self.env.reset()
-        return observation
+        self.prev_action = 0
+        self.prev_reward = 0
+        if not self.lab.reset():
+            assert 'Error reseting lab environment'
+        
+    def is_running(self):
+        return self.lab.is_running()
+
+    def get_state(self):
+        obs = self.lab.observations()  # dict of Numpy arrays
+        image = obs['RGBD_INTERLACED']
+
+        # create a low resolution (4x16) depth map from the 84x84 image
+        depth_map = image[:,:,3]
+        depth_map = depth_map[16:-16,:] # crop
+        depth_map = depth_map[:,2:-2] # crop
+        depth_map = depth_map[::13,::5] # subsample
+
+        image = image[:,:,:3].astype(np.float32) / 255. #RGB
+
+        # flatten array for later append
+        image = image.flatten()
+        depth_map = depth_map.flatten()
+
+        # quantize depth (as per DeepMind paper)
+        depth_map = np.power(depth_map/255., 10)
+        depth_map = np.digitize(depth_map,
+            [0,0.05,0.175,0.3,0.425,0.55,0.675,0.8,1.01])  # bins
+        depth_map -= 1
+
+        # velocity vectors
+        vel_vec1 = obs['VEL.TRANS'] 
+        vel_vec2 = obs['VEL.ROT']
+
+        # combined state
+        state = np.append(image, depth_map) 
+        state = np.append(state, vel_vec1)
+        state = np.append(state, vel_vec2)
+        state = np.append(state, self.prev_action)
+        state = np.append(state, self.prev_reward)
+
+        return state
+    
+    @staticmethod
+    def get_num_actions():
+        return len(GameManager.ACTION_LIST)
 
     def step(self, action):
-        self._update_display()
-        observation, reward, done, info = self.env.step(action)
-        return observation, reward, done, info
-
-    def _update_display(self):
-        if self.display:
-            self.env.render()
+        if action == -1:  #NO-OP
+            reward = 0
+        else:
+            reward = self.lab.step(GameManager.ACTION_LIST[action], num_steps=4)
+            self.prev_action = action
+            self.prev_reward = reward
+        
+        return reward, self.is_running()

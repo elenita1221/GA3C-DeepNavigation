@@ -39,18 +39,51 @@ class ThreadTrainer(Thread):
         self.server = server
         self.exit_flag = False
 
+    @staticmethod
+    def dynamic_pad(x, r, a):
+      size = int(Config.TIME_MAX) # required size
+      z = np.zeros((size-len(x),) + x.shape[1:])
+      x = np.append(x, z, axis=0)
+      z = np.zeros((size-len(r),) + r.shape[1:])
+      r = np.append(r, z, axis=0)
+      z = np.zeros((size-len(a),) + a.shape[1:])
+      a = np.append(a, z, axis=0)
+      assert len(x) == size 
+      return x, r, a
+
     def run(self):
         while not self.exit_flag:
             batch_size = 0
+            c__ = []; h__ = []   # lstm hidden states
             while batch_size <= Config.TRAINING_MIN_BATCH_SIZE:
-                x_, r_, a_ = self.server.training_q.get()
+                x_, r_, a_, lstm_ = self.server.training_q.get()
+
+                # when using LSTMs, the recurrence is over the TIME_MAX length
+                # trajectory from each agent. Use padding for trajectories of 
+                # length < TIME_MAX
+                if Config.NUM_LSTMS and x_.shape[0] != int(Config.TIME_MAX):
+                  x_, r_, a_ = ThreadTrainer.dynamic_pad(x_, r_, a_)
+
                 if batch_size == 0:
-                    x__ = x_; r__ = r_; a__ = a_
+                    x__ = x_; r__ = r_; a__ = a_ 
+
+                    if len(lstm_):
+                      c__ = []; h__ = []
+                      for i in range(Config.NUM_LSTMS):
+                        c__.append(lstm_[i]['c'])
+                        h__.append(lstm_[i]['h'])
+
                 else:
                     x__ = np.concatenate((x__, x_))
                     r__ = np.concatenate((r__, r_))
                     a__ = np.concatenate((a__, a_))
+
+                    if len(lstm_):
+                      for i in range(Config.NUM_LSTMS):
+                        c__[i] = np.concatenate((c__[i], lstm_[i]['c']))
+                        h__[i] = np.concatenate((h__[i], lstm_[i]['h']))
+
                 batch_size += x_.shape[0]
             
             if Config.TRAIN_MODELS:
-                self.server.train_model(x__, r__, a__, self.id)
+                self.server.train_model(x__, r__, a__, c__, h__, self.id)

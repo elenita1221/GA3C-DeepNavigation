@@ -40,7 +40,7 @@ class NetworkVP:
 
         self.img_width = Config.IMAGE_WIDTH
         self.img_height = Config.IMAGE_HEIGHT
-        self.img_channels = Config.STACKED_FRAMES
+        self.img_channels = Config.IMAGE_DEPTH * Config.STACKED_FRAMES
 
         self.learning_rate = Config.LEARNING_RATE_START
         self.beta = Config.BETA_START
@@ -69,6 +69,9 @@ class NetworkVP:
         self.x = tf.placeholder(
             tf.float32, [None, self.img_height, self.img_width, self.img_channels], name='X')
         self.y_r = tf.placeholder(tf.float32, [None], name='Yr')
+        self.p_rewards = tf.placeholder(tf.float32, [None, 1], name='p_rewards')
+        self.aux_inp = tf.placeholder(tf.float32, shape=[None, self.num_actions+Config.VEL_DIM], name='aux_input')
+        self.depth_labels = [tf.placeholder(tf.int32, shape=[None, Config.DEPTH_QUANTIZATION])]*Config.DEPTH_PIXELS
 
         self.var_beta = tf.placeholder(tf.float32, name='beta', shape=[])
         self.var_learning_rate = tf.placeholder(tf.float32, name='lr', shape=[])
@@ -78,19 +81,63 @@ class NetworkVP:
         # As implemented in A3C paper
         self.n1 = self.conv2d_layer(self.x, 8, 16, 'conv11', strides=[1, 4, 4, 1])
         self.n2 = self.conv2d_layer(self.n1, 4, 32, 'conv12', strides=[1, 2, 2, 1])
-        self.action_index = tf.placeholder(tf.float32, [None, self.num_actions])
+        self.action_index = tf.placeholder(tf.float32, name='action_index', shape=[None, self.num_actions])
         _input = self.n2
 
         flatten_input_shape = _input.get_shape()
         nb_elements = flatten_input_shape[1] * flatten_input_shape[2] * flatten_input_shape[3]
 
         self.flat = tf.reshape(_input, shape=[-1, nb_elements._value])
-        self.d1 = self.dense_layer(self.flat, 256, 'dense1')
+        self.enc_out = self.dense_layer(self.flat, 256, 'dense1') # encoder output
 
-        self.logits_v = tf.squeeze(self.dense_layer(self.d1, 1, 'logits_v', func=None), axis=[1])
-        self.cost_v = 0.5 * tf.reduce_sum(tf.square(self.y_r - self.logits_v), axis=0)
+        self.d1 = self.dense_layer(self.enc_out, 128, 'depth1')
 
-        self.logits_p = self.dense_layer(self.d1, self.num_actions, 'logits_p', func=None)
+        # input to first LSTM. Add previous step rewards
+        self.aux1 = tf.concat((self.enc_out, self.p_rewards), axis=1)   
+
+        lstm_layers = Config.NUM_LSTMS
+        self.seq_len = tf.placeholder(tf.int32, name='seq_len', shape=[])  # LSTM sequence length
+        self.state_in = [] # LSTM input state
+        self.state_out = [] # LSTM output state
+
+        with tf.variable_scope('lstm1'):
+          lstm_cell = tf.contrib.rnn.BasicLSTMCell(64, state_is_tuple=True)
+          c_in_1 = tf.placeholder(tf.float32, name='c_1', shape=[None, lstm_cell.state_size.c])
+          h_in_1 = tf.placeholder(tf.float32, name='h_1', shape=[None, lstm_cell.state_size.h])
+          self.state_in.append((c_in_1, h_in_1))
+          
+          # using tf.stack here since tf doesn't like when integers and
+          # placeholders are mixed together in the desired shape
+          rnn_in = tf.reshape(self.aux1, tf.stack([-1, self.seq_len, self.aux1.shape[1]])) 
+          
+          init_1 = tf.contrib.rnn.LSTMStateTuple(c_in_1, h_in_1)
+          lstm_outputs_1, lstm_state_1 = tf.nn.dynamic_rnn(lstm_cell, rnn_in,
+              initial_state=init_1, time_major=False)
+          lstm_outputs_1 = tf.reshape(lstm_outputs_1, [-1, 64])
+          self.state_out.append(tuple(lstm_state_1))
+
+        # input to second LSTM. Add previous LSTM output, vel and prev action
+        self.aux2 = tf.concat((self.enc_out, lstm_outputs_1), axis=1)  
+        self.aux2 = tf.concat((self.aux2, self.aux_inp), axis=1)
+
+        with tf.variable_scope('lstm2'):
+          lstm_cell = tf.contrib.rnn.BasicLSTMCell(256, state_is_tuple=True)
+          c_in_2 = tf.placeholder(tf.float32, name='c_2', shape=[None, lstm_cell.state_size.c])
+          h_in_2 = tf.placeholder(tf.float32, name='h_2', shape=[None, lstm_cell.state_size.h])
+          self.state_in.append((c_in_2, h_in_2))
+          
+          rnn_in = tf.reshape(self.aux2, tf.stack([-1, self.seq_len, self.aux2.shape[1]]))
+          init_2 = tf.contrib.rnn.LSTMStateTuple(c_in_2, h_in_2)
+          lstm_outputs_2, lstm_state_2 = tf.nn.dynamic_rnn(lstm_cell, rnn_in,
+              initial_state=init_2, time_major=False)
+          self.state_out.append(tuple(lstm_state_2))
+
+          self.rnn_out = tf.reshape(lstm_outputs_2, [-1, 256])
+
+        self.d2 = self.dense_layer(self.rnn_out, 128, 'depth2')
+        self.logits_v = tf.squeeze(self.dense_layer(self.rnn_out, 1, 'logits_v', func=None), axis=[1])
+        self.logits_p = self.dense_layer(self.rnn_out, self.num_actions, 'logits_p', func=None)
+
         if Config.USE_LOG_SOFTMAX:
             self.softmax_p = tf.nn.softmax(self.logits_p)
             self.log_softmax_p = tf.nn.log_softmax(self.logits_p)
@@ -108,10 +155,33 @@ class NetworkVP:
             self.cost_p_2 = -1 * self.var_beta * \
                         tf.reduce_sum(tf.log(tf.maximum(self.softmax_p, self.log_epsilon)) *
                                       self.softmax_p, axis=1)
+
+        # use a mask since we pad bactches of size < TIME_MAX
+        mask = tf.reduce_max(self.action_index,axis=1)
+        self.cost_v = 0.5 * tf.reduce_sum(tf.square(self.y_r - self.logits_v) * mask, axis=0)
+        self.cost_p_1_agg = tf.reduce_sum(self.cost_p_1 * mask, axis=0)
+        self.cost_p_2_agg = tf.reduce_sum(self.cost_p_2 * mask, axis=0)
+
+        # depth logits
+        self.d1_logits = [self.dense_layer(self.d1, Config.DEPTH_QUANTIZATION, 'logits_d1_%d'%i, func=None) 
+            for i in range(Config.DEPTH_PIXELS)]
         
-        self.cost_p_1_agg = tf.reduce_sum(self.cost_p_1, axis=0)
-        self.cost_p_2_agg = tf.reduce_sum(self.cost_p_2, axis=0)
-        self.cost_p = -(self.cost_p_1_agg + self.cost_p_2_agg)
+        self.d2_logits = [self.dense_layer(self.d2, Config.DEPTH_QUANTIZATION, 'logits_d2_%d'%i, func=None) 
+            for i in range(Config.DEPTH_PIXELS)]
+
+        self.d1_loss = [tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=self.d1_logits[i],
+          labels=self.depth_labels[i])*mask, axis=0) for i in range(Config.DEPTH_PIXELS)]
+        
+        self.d2_loss = [tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=self.d2_logits[i],
+          labels=self.depth_labels[i])*mask, axis=0) for i in range(Config.DEPTH_PIXELS)]
+
+        # total depth loss
+        self.d1_loss = tf.add_n(self.d1_loss)
+        self.d2_loss = tf.add_n(self.d2_loss)
+        #self.d1_loss = tf.reduce_mean(self.d1_loss)
+        #self.d2_loss = tf.reduce_mean(self.d2_loss)
+
+        self.cost_p = -(self.cost_p_1_agg + self.cost_p_2_agg) + Config.BETA1*self.d1_loss + Config.BETA2*self.d2_loss
         
         if Config.DUAL_RMSPROP:
             self.opt_p = tf.train.RMSPropOptimizer(
@@ -164,6 +234,8 @@ class NetworkVP:
         summaries.append(tf.summary.scalar("Pcost_entropy", self.cost_p_2_agg))
         summaries.append(tf.summary.scalar("Pcost", self.cost_p))
         summaries.append(tf.summary.scalar("Vcost", self.cost_v))
+        summaries.append(tf.summary.scalar("D1_loss", self.d1_loss))
+        summaries.append(tf.summary.scalar("D2_loss", self.d2_loss))
         summaries.append(tf.summary.scalar("LearningRate", self.var_learning_rate))
         summaries.append(tf.summary.scalar("Beta", self.var_beta))
         for var in tf.trainable_variables():
@@ -171,7 +243,7 @@ class NetworkVP:
 
         summaries.append(tf.summary.histogram("activation_n1", self.n1))
         summaries.append(tf.summary.histogram("activation_n2", self.n2))
-        summaries.append(tf.summary.histogram("activation_d2", self.d1))
+        summaries.append(tf.summary.histogram("activation_enc", self.enc_out))
         summaries.append(tf.summary.histogram("activation_v", self.logits_v))
         summaries.append(tf.summary.histogram("activation_p", self.softmax_p))
 
@@ -229,17 +301,114 @@ class NetworkVP:
         prediction = self.sess.run(self.softmax_p, feed_dict={self.x: x})
         return prediction
     
-    def predict_p_and_v(self, x):
-        return self.sess.run([self.softmax_p, self.logits_v], feed_dict={self.x: x})
+    def predict_p_and_v(self, x, c_batch, h_batch):
+        batch_size = x.shape[0]
+        im, depth_map, vel, p_action, p_reward = self.disentangle_obs(x)
+        feed_dict={self.x: im, self.seq_len: 1, self.p_rewards: p_reward,
+            self.aux_inp: np.concatenate((vel, p_action), axis=1)}
+
+        # shape of c/h_batch: (batch_size, Config.NUM_LSTMS, 256)
+        for i in range(Config.NUM_LSTMS):
+          c = c_batch[:,i,:] if i == 1 else c_batch[:,i,:64]
+          h = h_batch[:,i,:] if i == 1 else h_batch[:,i,:64]
+          feed_dict.update({self.state_in[i]: (c, h)})
+
+        p, v, lstm_out = self.sess.run([self.softmax_p, self.logits_v,
+          self.state_out], feed_dict=feed_dict)
+
+        # reshape lstm_out(c/h) to: (batch_size, Config.NUM_LSTMS, 256)
+        c = np.zeros((batch_size, Config.NUM_LSTMS, 256),
+            dtype=np.float32)
+        
+        h = np.zeros((batch_size, Config.NUM_LSTMS, 256),
+            dtype=np.float32)
+        
+        for i in range(Config.NUM_LSTMS):
+          if i == 0:
+            c[:,i,:64] = lstm_out[i][0]
+            h[:,i,:64] = lstm_out[i][1]
+          else:
+            c[:,i,:] = lstm_out[i][0]
+            h[:,i,:] = lstm_out[i][1]
+            
+        return p, v, c, h
     
-    def train(self, x, y_r, a, trainer_id):
+    def disentangle_obs(self, states):
+      """
+      The obervations x is a concatenation of image, depth_map, prev_actn,
+      velocity vector, and prev_rewards. This function separate these
+      """
+
+      batch_size = states.shape[0]
+      im_size = Config.IMAGE_HEIGHT*Config.IMAGE_WIDTH*Config.IMAGE_DEPTH
+      im = states[:, :im_size]
+      im = np.reshape(im, (batch_size, Config.IMAGE_HEIGHT, Config.IMAGE_WIDTH, Config.IMAGE_DEPTH))
+      states = states[:, im_size:]
+
+      dm_size = Config.DEPTH_PIXELS
+      dm_val = states[:, :dm_size].astype(int)                          
+      states = states[:, dm_size:]
+
+      depth_map = np.zeros((dm_size, batch_size, Config.DEPTH_QUANTIZATION))
+      for i in range(dm_size):
+        depth_map[i, np.arange(batch_size), dm_val[:,i].astype(int)] = 1 # make one-hot
+
+      vl_size = Config.VEL_DIM
+      vel = states[:, :vl_size]
+      states = states[:, vl_size:]
+
+      assert states.shape[1] == 2, "Missed something ?!"
+      p_action = np.zeros((batch_size, self.num_actions))
+      p_action[np.arange(batch_size), states[:,0].astype(int)] = 1  # make one-hot
+      p_reward = states[:, 1]
+      p_reward = np.reshape(p_reward, (batch_size, 1))
+
+      # return (batch_size, ...) arrays
+      return im, depth_map, vel, p_action, p_reward 
+
+    def train(self, x, y_r, a, c, h, trainer_id):
         feed_dict = self.__get_base_feed_dict()
-        feed_dict.update({self.x: x, self.y_r: y_r, self.action_index: a})
+        im, depth_map, vel, p_action, p_reward = self.disentangle_obs(x)
+        feed_dict.update({self.x: im, self.y_r: y_r, self.action_index: a,
+          self.seq_len: int(Config.TIME_MAX), self.p_rewards: p_reward,
+          self.aux_inp: np.concatenate((vel, p_action), axis=1)})
+
+        # depth supervision
+        feed_dict.update({self.depth_labels[i]:depth_map[i] for i in
+          range(Config.DEPTH_PIXELS)})
+
+        for i in range(Config.NUM_LSTMS):  
+          cb = np.array(c[i]).reshape((-1, 256))
+          hb = np.array(h[i]).reshape((-1, 256))
+          if i == 0:
+            cb = cb[:,:64]
+            hb = hb[:,:64]
+
+          feed_dict.update({self.state_in[i]: (cb, hb)})
+
         self.sess.run(self.train_op, feed_dict=feed_dict)
 
-    def log(self, x, y_r, a):
+    def log(self, x, y_r, a, c, h):
         feed_dict = self.__get_base_feed_dict()
-        feed_dict.update({self.x: x, self.y_r: y_r, self.action_index: a})
+        im, depth_map, vel, p_action, p_reward = self.disentangle_obs(x)
+
+        feed_dict.update({self.x: im, self.y_r: y_r, self.action_index: a,
+          self.seq_len: int(Config.TIME_MAX), self.p_rewards: p_reward,
+          self.aux_inp: np.concatenate((vel, p_action), axis=1)})
+
+        # depth supervision
+        feed_dict.update({self.depth_labels[i]:depth_map[i] for i in
+          range(Config.DEPTH_PIXELS)})
+
+        for i in range(Config.NUM_LSTMS):  
+          cb = np.array(c[i]).reshape((-1, 256))
+          hb = np.array(h[i]).reshape((-1, 256))
+          if i == 0:
+            cb = cb[:,:64]
+            hb = hb[:,:64]
+          
+          feed_dict.update({self.state_in[i]: (cb, hb)})
+
         step, summary = self.sess.run([self.global_step, self.summary_op], feed_dict=feed_dict)
         self.log_writer.add_summary(summary, step)
 

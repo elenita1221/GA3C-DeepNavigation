@@ -28,7 +28,7 @@ from datetime import datetime
 from multiprocessing import Process, Queue, Value
 
 import numpy as np
-import time
+import sys, time
 
 from Config import Config
 from Environment import Environment
@@ -54,13 +54,23 @@ class ProcessAgent(Process):
         self.exit_flag = Value('i', 0)
 
     @staticmethod
-    def _accumulate_rewards(experiences, discount_factor, terminal_reward):
-        reward_sum = terminal_reward
-        for t in reversed(range(0, len(experiences)-1)):
-            r = np.clip(experiences[t].reward, Config.REWARD_MIN, Config.REWARD_MAX)
-            reward_sum = discount_factor * reward_sum + r
-            experiences[t].reward = reward_sum
-        return experiences[:-1]
+    def _accumulate_rewards(experiences, discount_factor, value, is_running):
+        if is_running:
+          reward_sum = value # terminal reward
+          for t in reversed(range(0, len(experiences)-1)):
+              r = np.clip(experiences[t].reward, Config.REWARD_MIN, Config.REWARD_MAX) if Config.REWARD_CLIPPING else experiences[t].reward
+              reward_sum = discount_factor * reward_sum + r
+              experiences[t].reward = reward_sum
+          return experiences[:-1]
+        # if the episode has terminated, we take the full trajectory into
+        # account, including the very last experience 
+        else:
+          reward_sum = 0
+          for t in reversed(range(0, len(experiences))):
+              r = np.clip(experiences[t].reward, Config.REWARD_MIN, Config.REWARD_MAX) if Config.REWARD_CLIPPING else experiences[t].reward
+              reward_sum = discount_factor * reward_sum + r
+              experiences[t].reward = reward_sum
+          return experiences
 
     def convert_data(self, experiences):
         x_ = np.array([exp.state for exp in experiences])
@@ -68,12 +78,22 @@ class ProcessAgent(Process):
         r_ = np.array([exp.reward for exp in experiences])
         return x_, r_, a_
 
-    def predict(self, state):
+    def predict(self, state, lstm_inputs):
         # put the state in the prediction q
-        self.prediction_q.put((self.id, state))
+        
+        # lstm_inputs: [dict{stacklayer1}, dict{stacklayer2}, ...]
+        c_state = np.array([lstm['c'] for lstm in lstm_inputs]) if len(lstm_inputs) else None
+        h_state = np.array([lstm['h'] for lstm in lstm_inputs]) if len(lstm_inputs) else None
+        self.prediction_q.put((self.id, state, c_state, h_state))  
         # wait for the prediction to come back
-        p, v = self.wait_q.get()
-        return p, v
+        p, v, c_state, h_state = self.wait_q.get()
+
+        if not len(lstm_inputs):
+          return p, v, []
+
+        # convert return back to form: [dict{stack-layer1}, dict{stack-layer2}, ...]
+        l = [{'c':c_state[i], 'h':h_state[i]} for i in range(c_state.shape[0])] 
+        return p, v, l
 
     def select_action(self, prediction):
         if Config.PLAY_MODE:
@@ -84,32 +104,44 @@ class ProcessAgent(Process):
 
     def run_episode(self):
         self.env.reset()
-        done = False
+        is_running = True
         experiences = []
 
         time_count = 0
         reward_sum = 0.0
 
-        while not done:
+        # input states for prediction
+        lstm_input_p = [{'c':np.zeros(256, dtype=np.float32),
+          'h':np.zeros(256, dtype=np.float32)}]*Config.NUM_LSTMS
+
+        # input states for training
+        lstm_input_t = [{'c':np.zeros(256, dtype=np.float32),
+          'h':np.zeros(256, dtype=np.float32)}]*Config.NUM_LSTMS
+
+        while is_running:
+
             # very first few frames
             if self.env.current_state is None:
-                self.env.step(0)  # 0 == NOOP
+                _ , is_running = self.env.step(-1)  # NOOP
+                assert(is_running)
                 continue
 
-            prediction, value = self.predict(self.env.current_state)
+            prediction, value, lstm_input_p = self.predict(self.env.current_state, lstm_input_p)
             action = self.select_action(prediction)
-            reward, done = self.env.step(action)
+            reward, is_running = self.env.step(action)
+
             reward_sum += reward
-            exp = Experience(self.env.previous_state, action, prediction, reward, done)
+            exp = Experience(self.env.previous_state, action, prediction, reward)
             experiences.append(exp)
-
-            if done or time_count == Config.TIME_MAX:
-                terminal_reward = 0 if done else value
-
-                updated_exps = ProcessAgent._accumulate_rewards(experiences, self.discount_factor, terminal_reward)
+            
+            if not is_running or time_count == int(Config.TIME_MAX):
+                updated_exps = ProcessAgent._accumulate_rewards(experiences, self.discount_factor, value, is_running)
                 x_, r_, a_ = self.convert_data(updated_exps)
-                yield x_, r_, a_, reward_sum
-
+                yield x_, r_, a_, lstm_input_t, reward_sum, time_count 
+ 
+                # lstm input state for next training step
+                lstm_input_t = lstm_input_p
+                                                                        
                 # reset the tmax count
                 time_count = 0
                 # keep the last experience for the next batch
@@ -122,12 +154,15 @@ class ProcessAgent(Process):
         # randomly sleep up to 1 second. helps agents boot smoothly.
         time.sleep(np.random.rand())
         np.random.seed(np.int32(time.time() % 1 * 1000 + self.id * 10))
+        total_steps = 0
 
-        while self.exit_flag.value == 0:
+        while total_steps == Config.MAX_STEPS or self.exit_flag.value == 0:
             total_reward = 0
             total_length = 0
-            for x_, r_, a_, reward_sum in self.run_episode():
+            for x_, r_, a_, lstm_, reward_sum, steps in self.run_episode():
+                total_steps += steps
                 total_reward += reward_sum
                 total_length += len(r_) + 1  # +1 for last frame that we drop
-                self.training_q.put((x_, r_, a_))
-            self.episode_log_q.put((datetime.now(), total_reward, total_length))
+                self.training_q.put((x_, r_, a_, lstm_))
+            self.episode_log_q.put((datetime.now(), total_reward, total_length,
+              total_steps))
