@@ -34,10 +34,13 @@ py_binary(
 )
 ```
 
-Then run bazel command to run training
+Then run bazel command to run the agent. 
 ```
 bazel run :GA3C-DeepNavigation_train --define headless=osmesa
 ```
+Use ```PLAY_MODE=False``` in Config.py for training. 
+Setting ```PLAY_MODE=True``` loads model parameters from a 
+checkpoint and runs a single agent. A display is expected.
 
 ## Results 
 
@@ -47,7 +50,7 @@ bazel run :GA3C-DeepNavigation_train --define headless=osmesa
 [YouTube](https://www.youtube.com/watch?v=vyS0Z7wdHHs)
 
 #### Learning Curve
-<img src="./assets/nav_maze_static_01_score.png" width="300" height="400" />
+<img src="./assets/nav_maze_static_01_score.png" width="400" height="300" />
 
 ### 2. Stairway to melon
 
@@ -55,7 +58,7 @@ bazel run :GA3C-DeepNavigation_train --define headless=osmesa
 [YouTube](https://www.youtube.com/watch?v=0R5MGM7VPo4)
 
 #### Learning Curve
-<img src="./assets/stairway_to_melon_score.png" width="300" height="400" />
+<img src="./assets/stairway_to_melon_score.png" width="400" height="300" />
 
 <!---
 ## How to show result

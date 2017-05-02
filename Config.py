@@ -61,6 +61,12 @@ class Config:
     # Device
     DEVICE = 'gpu:0'
 
+    # Play mode display size
+    DISPLAY_SIZE = (440, 400)
+    # Movie recording
+    RECORD = False
+    VIDEO_DURATION = 60 # seconds
+
     # Enable the dynamic adjustment (+ waiting time to start it)
     DYNAMIC_SETTINGS = False
     DYNAMIC_SETTINGS_STEP_WAIT = 20

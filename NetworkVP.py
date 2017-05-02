@@ -301,7 +301,7 @@ class NetworkVP:
         prediction = self.sess.run(self.softmax_p, feed_dict={self.x: x})
         return prediction
     
-    def predict_p_and_v(self, x, c_batch, h_batch):
+    def predict_p_and_v_and_d(self, x, c_batch, h_batch):
         batch_size = x.shape[0]
         im, depth_map, vel, p_action, p_reward = self.disentangle_obs(x)
         feed_dict={self.x: im, self.seq_len: 1, self.p_rewards: p_reward,
@@ -313,8 +313,8 @@ class NetworkVP:
           h = h_batch[:,i,:] if i == 1 else h_batch[:,i,:64]
           feed_dict.update({self.state_in[i]: (c, h)})
 
-        p, v, lstm_out = self.sess.run([self.softmax_p, self.logits_v,
-          self.state_out], feed_dict=feed_dict)
+        p, v, d, lstm_out = self.sess.run([self.softmax_p, self.logits_v,
+            self.d1_logits, self.state_out], feed_dict=feed_dict)
 
         # reshape lstm_out(c/h) to: (batch_size, Config.NUM_LSTMS, 256)
         c = np.zeros((batch_size, Config.NUM_LSTMS, 256),
@@ -331,7 +331,8 @@ class NetworkVP:
             c[:,i,:] = lstm_out[i][0]
             h[:,i,:] = lstm_out[i][1]
             
-        return p, v, c, h
+        d = np.array(d).transpose(1, 0, 2)
+        return p, v, d, c, h
     
     def disentangle_obs(self, states):
       """

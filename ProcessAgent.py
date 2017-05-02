@@ -36,7 +36,7 @@ from Experience import Experience
 
 
 class ProcessAgent(Process):
-    def __init__(self, id, prediction_q, training_q, episode_log_q):
+    def __init__(self, id, prediction_q, training_q, episode_log_q, dm):
         super(ProcessAgent, self).__init__()
 
         self.id = id
@@ -52,6 +52,7 @@ class ProcessAgent(Process):
         # one frame at a time
         self.wait_q = Queue(maxsize=1)
         self.exit_flag = Value('i', 0)
+        self.display_manager = dm
 
     @staticmethod
     def _accumulate_rewards(experiences, discount_factor, value, is_running):
@@ -86,14 +87,14 @@ class ProcessAgent(Process):
         h_state = np.array([lstm['h'] for lstm in lstm_inputs]) if len(lstm_inputs) else None
         self.prediction_q.put((self.id, state, c_state, h_state))  
         # wait for the prediction to come back
-        p, v, c_state, h_state = self.wait_q.get()
+        p, v, d, c_state, h_state = self.wait_q.get()
 
         if not len(lstm_inputs):
-          return p, v, []
+          return p, v, d, []
 
         # convert return back to form: [dict{stack-layer1}, dict{stack-layer2}, ...]
         l = [{'c':c_state[i], 'h':h_state[i]} for i in range(c_state.shape[0])] 
-        return p, v, l
+        return p, v, d, l
 
     def select_action(self, prediction):
         if Config.PLAY_MODE:
@@ -126,7 +127,11 @@ class ProcessAgent(Process):
                 assert(is_running)
                 continue
 
-            prediction, value, lstm_input_p = self.predict(self.env.current_state, lstm_input_p)
+            prediction, value, depth, lstm_input_p = self.predict(self.env.current_state, lstm_input_p)
+            
+            if Config.PLAY_MODE:
+                self.display_manager.update(self.env.current_state, prediction, value, depth)
+
             action = self.select_action(prediction)
             reward, is_running = self.env.step(action)
 

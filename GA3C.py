@@ -59,6 +59,7 @@ for i in range(1, len(sys.argv)):
 
 # Adjust configs for Play mode
 if Config.PLAY_MODE:
+    print("==Play mode on==")
     Config.AGENTS = 1
     Config.PREDICTORS = 1
     Config.TRAINERS = 1

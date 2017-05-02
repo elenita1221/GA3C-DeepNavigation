@@ -62,11 +62,11 @@ class ThreadPredictor(Thread):
             batch = states[:size]
             cb = cs[:size]
             hb = hs[:size]
-            p, v, c, h = self.server.model.predict_p_and_v(batch, cb, hb)
+            p, v, d, c, h = self.server.model.predict_p_and_v_and_d(batch, cb, hb)
 
             for i in range(size):
                 if ids[i] < len(self.server.agents):
                     if Config.NUM_LSTMS:
                       assert c[i].shape == (Config.NUM_LSTMS, 256)
                       assert h[i].shape == (Config.NUM_LSTMS, 256)
-                    self.server.agents[ids[i]].wait_q.put((p[i], v[i], c[i], h[i]))
+                    self.server.agents[ids[i]].wait_q.put((p[i], v[i], d[i], c[i], h[i]))

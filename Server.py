@@ -36,6 +36,7 @@ from ProcessStats import ProcessStats
 from ThreadDynamicAdjustment import ThreadDynamicAdjustment
 from ThreadPredictor import ThreadPredictor
 from ThreadTrainer import ThreadTrainer
+from Display import Display
 
 class Server:
     def __init__(self):
@@ -55,10 +56,11 @@ class Server:
         self.predictors = []
         self.trainers = []
         self.dynamic_adjustment = ThreadDynamicAdjustment(self)
+        self.display_manager = Display()
 
     def add_agent(self):
         self.agents.append(
-            ProcessAgent(len(self.agents), self.prediction_q, self.training_q, self.stats.episode_log_q))
+            ProcessAgent(len(self.agents), self.prediction_q, self.training_q, self.stats.episode_log_q, self.display_manager))
         self.agents[-1].start()
 
     def remove_agent(self):
