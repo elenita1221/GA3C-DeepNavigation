@@ -47,7 +47,7 @@ bazel run :GA3C-DeepNavigation_train --define headless=osmesa
 [YouTube](https://www.youtube.com/watch?v=vyS0Z7wdHHs)
 
 #### Learning Curve
-![nav_maze_static_01_score](./assets/nav_maze_static_01_score.png)
+![nav_maze_static_01_score](./assets/nav_maze_static_01_score.png =400x300)
 
 ### 2. Stairway to melon
 
@@ -55,7 +55,7 @@ bazel run :GA3C-DeepNavigation_train --define headless=osmesa
 [YouTube](https://www.youtube.com/watch?v=0R5MGM7VPo4)
 
 #### Learning Curve
-![stairway_to_melon_score](./assets/stairway_to_melon_score.png)
+![stairway_to_melon_score](./assets/stairway_to_melon_score.png =400x300)
 
 <!---
 ## How to show result
