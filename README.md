@@ -34,13 +34,19 @@ py_binary(
 )
 ```
 
-Then run bazel command to run the agent. 
+Then run bazel command to run the agent 
 ```
 bazel run :GA3C-DeepNavigation_train --define headless=osmesa
 ```
 Use ```PLAY_MODE=False``` in Config.py for training. 
 Setting ```PLAY_MODE=True``` loads model parameters from a 
 checkpoint and runs a single agent. A display is expected.
+
+## Network
+The neural net architecture is the same as in the paper, **but for the
+loop-prediction loss**.
+
+<img src="./assets/nn.png" width="400" height="300" />
 
 ## Results 
 
@@ -60,11 +66,6 @@ checkpoint and runs a single agent. A display is expected.
 #### Learning Curve
 <img src="./assets/stairway_to_melon_score.png" width="400" height="300" />
 
-<!---
-## How to show result
 
-To show result after training, run this command.
-```
-bazel run //unreal:display --define headless=glx
-```
--->
+## Acknowledgement 
+[Unreal code by miyosuda](https://github.com/miyosuda/unreal)
