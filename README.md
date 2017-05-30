@@ -2,7 +2,7 @@
 
 ## Description
 
-TensorFlow implementation of ideas in the DeepMind paper ["Learning to Navigate in Complex Environments"](https://arxiv.org/abs/1611.03673). The baseline architecture is GPU-based A3C from the paper ["Reinforcement Learning through Asynchronous Advantage Actor-Critic on a GPU"](https://openreview.net/forum?id=r1VGvBcxl)
+TensorFlow implementation of ideas in the DeepMind paper ["Learning to Navigate in Complex Environments"](https://arxiv.org/abs/1611.03673). The baseline architecture is GPU-based A3C from the paper ["Reinforcement Learning through Asynchronous Advantage Actor-Critic on a GPU"](https://openreview.net/forum?id=r1VGvBcxl). Full [report](./assets/DeepNav_final.pdf).
 
 ## Requirements
 
